@@ -243,6 +243,9 @@ def submit_answer(
     def work() -> None:
         nonlocal coins, quiz_complete, session
         db.flush()
+        # joinedload cache can still show answer=None after flush; expire so
+        # history / answered_count / sequence include the answer we just staged.
+        db.expire_all()
         session = get_session(db, session_id)
         coins = _compute_coins(session, is_correct)
         answered_count = _answered_count(session)
@@ -254,10 +257,11 @@ def submit_answer(
             session.completed_at = datetime.now(timezone.utc)
             session.summary_json = insights.model_dump()
         else:
+            next_sequence = max(q.sequence_number for q in session.questions) + 1
             generated, metadata = llm_service.generate_question(
-                session.topic, history, answered_count + 1
+                session.topic, history, next_sequence
             )
-            _persist_question(db, session, generated, metadata, answered_count + 1)
+            _persist_question(db, session, generated, metadata, next_sequence)
 
     _run_in_transaction(db, work)
 
