@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSession, SUPPORT_ERROR, type Session } from "../api/client";
-import { clearSessionId, loadSessionId } from "./useBuddyProfile";
+import { clearSessionId, loadSessionId } from "./playerSession";
 import {
   cacheActiveSession,
   clearActiveSessionCache,

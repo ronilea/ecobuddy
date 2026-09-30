@@ -6,7 +6,8 @@ import { BuddyAvatar } from "../components/BuddyAvatar";
 import { CoinBadge } from "../components/CoinBadge";
 import { ProgressBar } from "../components/ProgressBar";
 import { ArrowRightIcon, CartIcon, PlusIcon, RestartIcon } from "../components/icons";
-import { saveSessionId, useBuddyProfile } from "../hooks/useBuddyProfile";
+import { saveSessionId } from "../hooks/playerSession";
+import { useWallet } from "../hooks/useWallet";
 import { useStoredSession } from "../hooks/useStoredSession";
 import { buildBuddyPauseSummary } from "../utils/pauseSummary";
 
@@ -162,7 +163,7 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, loading: walletLoading, error: walletError } = useBuddyProfile();
+  const { profile, loading: walletLoading, error: walletError } = useWallet();
   const { session: storedSession, loading: sessionLoading, clearSession, refresh } =
     useStoredSession();
 

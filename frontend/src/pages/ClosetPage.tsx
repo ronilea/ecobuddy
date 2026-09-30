@@ -5,8 +5,8 @@ import { CoinBadge } from "../components/CoinBadge";
 import { CoinPrice } from "../components/CoinPrice";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CloseIcon } from "../components/icons";
-import { useBuddyProfile } from "../hooks/useBuddyProfile";
-import { dicebearUrl } from "../config/outfits";
+import { useWallet } from "../hooks/useWallet";
+import { dicebearUrl, OUTFITS } from "../config/outfits";
 
 type ClosetLocationState = {
   returnTo?: string;
@@ -22,7 +22,7 @@ export function ClosetPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const returnTo = (location.state as ClosetLocationState | null)?.returnTo;
-  const { profile, purchaseAndEquipOutfit, equipOutfit, outfits, loading, error } = useBuddyProfile();
+  const { profile, purchaseOutfit, equipOutfit, loading, error } = useWallet();
   const [pendingPurchase, setPendingPurchase] = useState<PendingPurchase | null>(null);
 
   function goBack() {
@@ -58,7 +58,7 @@ export function ClosetPage() {
 
   function confirmPurchase() {
     if (!pendingPurchase) return;
-    void purchaseAndEquipOutfit(pendingPurchase.id)
+    void purchaseOutfit(pendingPurchase.id)
       .catch((err) => console.error("Purchase failed", err))
       .finally(() => setPendingPurchase(null));
   }
@@ -93,7 +93,7 @@ export function ClosetPage() {
       )}
 
       <div className="outfit-grid">
-        {outfits.map((outfit) => {
+        {OUTFITS.map((outfit) => {
           const owned = profile.ownedOutfits.includes(outfit.id);
           const wearing = profile.equippedOutfitId === outfit.id;
           const canAfford = profile.coins >= outfit.cost;
