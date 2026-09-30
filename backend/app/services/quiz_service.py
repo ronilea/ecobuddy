@@ -22,6 +22,7 @@ from app.schemas import (
     SessionSummaryOut,
     StudentAnswerOut,
 )
+from app.database import SessionLocal
 from app.services import llm_service, wallet_service
 
 logger = logging.getLogger(__name__)
@@ -164,36 +165,43 @@ def _run_in_transaction(db: Session, work) -> None:
         raise
 
 
-def create_session(db: Session, topic: str) -> SessionOut:
+def create_session(topic: str) -> SessionOut:
     topic = topic.strip()
-    session = QuizSession(topic=topic)
-    db.add(session)
+    generated, metadata = llm_service.generate_question(topic, [], 1)
 
-    def work() -> None:
-        db.flush()
-        generated, metadata = llm_service.generate_question(topic, [], 1)
-        _persist_question(db, session, generated, metadata, 1)
+    db = SessionLocal()
+    try:
+        session = QuizSession(topic=topic)
+        db.add(session)
 
-    _run_in_transaction(db, work)
-    return build_session_out(get_session(db, session.id))
+        def work() -> None:
+            db.flush()
+            _persist_question(db, session, generated, metadata, 1)
+
+        _run_in_transaction(db, work)
+        return build_session_out(get_session(db, session.id))
+    finally:
+        db.close()
 
 
-def _compute_coins(session: QuizSession, is_correct: bool) -> CoinEventOut:
+def _compute_coins_after_answer(
+    prior_answered: list[Question], is_correct: bool
+) -> CoinEventOut:
     if not is_correct:
         return CoinEventOut()
 
-    answered = _answered_questions(session)
+    answered_count = len(prior_answered) + 1
     coins = 0
     streak_bonus = False
     set_complete_bonus = False
 
-    if len(answered) >= STREAK_LENGTH:
-        last_n = answered[-STREAK_LENGTH:]
-        if all(q.answer is not None and q.answer.is_correct for q in last_n):
+    if answered_count >= STREAK_LENGTH:
+        recent = prior_answered[-(STREAK_LENGTH - 1) :]
+        if all(q.answer is not None and q.answer.is_correct for q in recent):
             streak_bonus = True
             coins += COIN_STREAK_BONUS
 
-    if len(answered) % QUESTIONS_PER_SET == 0:
+    if answered_count % QUESTIONS_PER_SET == 0:
         set_complete_bonus = True
         coins += COIN_SET_COMPLETE
 
@@ -202,6 +210,19 @@ def _compute_coins(session: QuizSession, is_correct: bool) -> CoinEventOut:
         set_complete_bonus=set_complete_bonus,
         coins_earned=coins,
     )
+
+
+def _history_after_answer(session: QuizSession, question: Question, is_correct: bool) -> list[dict]:
+    history = _history_from_session(session)
+    history.append(
+        {
+            "sequence_number": question.sequence_number,
+            "stem": question.stem,
+            "focus_concept": question.focus_concept,
+            "is_correct": is_correct,
+        }
+    )
+    return history
 
 
 def _require_current_unanswered(session: QuizSession, question_id: UUID) -> Question:
@@ -219,71 +240,86 @@ def _require_current_unanswered(session: QuizSession, question_id: UUID) -> Ques
 
 
 def submit_answer(
-    db: Session,
     session_id: UUID,
     question_id: UUID,
     selected_option_index: int,
     player_id: UUID,
 ) -> tuple[AnswerFeedbackOut, SessionOut]:
-    session = get_session(db, session_id)
-    question = _require_current_unanswered(session, question_id)
-
-    is_correct = selected_option_index == question.correct_option_index
-    db.add(
-        StudentAnswer(
-            question_id=question.id,
-            selected_option_index=selected_option_index,
-            is_correct=is_correct,
-        )
-    )
-
-    coins = CoinEventOut()
-    quiz_complete = False
-
-    def work() -> None:
-        nonlocal coins, quiz_complete, session
-        db.flush()
-        # joinedload cache can still show answer=None after flush; expire so
-        # history / answered_count / sequence include the answer we just staged.
-        db.expire_all()
+    db = SessionLocal()
+    try:
         session = get_session(db, session_id)
-        coins = _compute_coins(session, is_correct)
-        answered_count = _answered_count(session)
+        question = _require_current_unanswered(session, question_id)
+        is_correct = selected_option_index == question.correct_option_index
+        prior_answered = _answered_questions(session)
+        coins = _compute_coins_after_answer(prior_answered, is_correct)
+        answered_count = len(prior_answered) + 1
         quiz_complete = answered_count >= TOTAL_QUESTIONS
-        history = _history_from_session(session)
+        topic = session.topic
+        history = _history_after_answer(session, question, is_correct)
+        next_sequence = max(q.sequence_number for q in session.questions) + 1
+        feedback = AnswerFeedbackOut(
+            is_correct=is_correct,
+            correct_option_index=question.correct_option_index,
+            explanation=question.explanation,
+            explanation_why=question.explanation_why,
+            coins=coins,
+            quiz_complete=quiz_complete,
+        )
+    finally:
+        db.close()
 
-        if quiz_complete:
-            insights = llm_service.generate_insights(session.topic, history)
-            session.completed_at = datetime.now(timezone.utc)
-            session.summary_json = insights.model_dump()
-        else:
-            next_sequence = max(q.sequence_number for q in session.questions) + 1
-            generated, metadata = llm_service.generate_question(
-                session.topic, history, next_sequence
+    if quiz_complete:
+        insights = llm_service.generate_insights(topic, history)
+        generated = None
+        metadata = None
+    else:
+        insights = None
+        generated, metadata = llm_service.generate_question(
+            topic, history, next_sequence
+        )
+
+    db = SessionLocal()
+    try:
+        session = get_session(db, session_id)
+        question = _require_current_unanswered(session, question_id)
+        if selected_option_index != question.correct_option_index:
+            raise HTTPException(status_code=409, detail="Answer conflict, please retry")
+
+        db.add(
+            StudentAnswer(
+                question_id=question.id,
+                selected_option_index=selected_option_index,
+                is_correct=is_correct,
             )
-            _persist_question(db, session, generated, metadata, next_sequence)
+        )
 
-    _run_in_transaction(db, work)
+        def work() -> None:
+            nonlocal session
+            db.flush()
+            db.expire_all()
+            session = get_session(db, session_id)
 
-    if coins.coins_earned > 0:
-        try:
-            wallet_service.credit_coins(db, player_id, coins.coins_earned)
-        except Exception:
-            logger.exception(
-                "Failed to credit %s coins for player %s after session %s",
-                coins.coins_earned,
-                player_id,
-                session_id,
-            )
-            raise
+            if quiz_complete:
+                session.completed_at = datetime.now(timezone.utc)
+                session.summary_json = insights.model_dump()
+            else:
+                _persist_question(db, session, generated, metadata, next_sequence)
 
-    session = get_session(db, session_id)
-    feedback = AnswerFeedbackOut(
-        is_correct=is_correct,
-        correct_option_index=question.correct_option_index,
-        explanation=question.explanation,
-        explanation_why=question.explanation_why,
-        coins=coins,
-        quiz_complete=quiz_complete,
-    )
-    return feedback, build_session_out(session)
+        _run_in_transaction(db, work)
+
+        if coins.coins_earned > 0:
+            try:
+                wallet_service.credit_coins(db, player_id, coins.coins_earned)
+            except Exception:
+                logger.exception(
+                    "Failed to credit %s coins for player %s after session %s",
+                    coins.coins_earned,
+                    player_id,
+                    session_id,
+                )
+                raise
+
+        session = get_session(db, session_id)
+        return feedback, build_session_out(session)
+    finally:
+        db.close()

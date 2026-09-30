@@ -2,10 +2,13 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
-  useState,
   type ReactNode,
 } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   equipOutfitRequest,
   fetchWallet,
@@ -14,6 +17,8 @@ import {
   type Wallet,
 } from "../api/client";
 import { OUTFITS } from "../config/outfits";
+
+export const walletQueryKey = ["wallet"] as const;
 
 export type BuddyProfile = {
   coins: number;
@@ -42,70 +47,60 @@ type BuddyProfileContextValue = {
 const BuddyProfileContext = createContext<BuddyProfileContextValue | null>(null);
 
 export function BuddyProfileProvider({ children }: { children: ReactNode }) {
-  const [profile, setProfile] = useState<BuddyProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const {
+    data: wallet,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: walletQueryKey,
+    queryFn: fetchWallet,
+  });
+
+  const purchaseMutation = useMutation({
+    mutationFn: purchaseOutfit,
+    onSuccess: (updated) => {
+      queryClient.setQueryData(walletQueryKey, updated);
+    },
+  });
+
+  const equipMutation = useMutation({
+    mutationFn: equipOutfitRequest,
+    onSuccess: (updated) => {
+      queryClient.setQueryData(walletQueryKey, updated);
+    },
+  });
+
+  const profile = wallet ? walletToProfile(wallet) : null;
+  const mutationError =
+    purchaseMutation.isError || equipMutation.isError ? SUPPORT_ERROR : null;
+  const error = isError ? SUPPORT_ERROR : mutationError;
 
   const refreshWallet = useCallback(async () => {
-    const wallet = await fetchWallet();
-    setProfile(walletToProfile(wallet));
-    setError(null);
-  }, []);
+    await refetch();
+  }, [refetch]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    fetchWallet()
-      .then((wallet) => {
-        if (!cancelled) {
-          setProfile(walletToProfile(wallet));
-          setError(null);
-        }
-      })
-      .catch((err) => {
-        console.error("Failed to load wallet", err);
-        if (!cancelled) {
-          setProfile(null);
-          setError(SUPPORT_ERROR);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const purchaseAndEquipOutfit = useCallback(
+    async (outfitId: string) => {
+      await purchaseMutation.mutateAsync(outfitId);
+    },
+    [purchaseMutation],
+  );
 
-  const purchaseAndEquipOutfit = useCallback(async (outfitId: string) => {
-    try {
-      const wallet = await purchaseOutfit(outfitId);
-      setProfile(walletToProfile(wallet));
-      setError(null);
-    } catch (err) {
-      console.error("Failed to purchase outfit", err);
-      setError(SUPPORT_ERROR);
-      throw err;
-    }
-  }, []);
-
-  const equipOutfit = useCallback(async (outfitId: string) => {
-    try {
-      const wallet = await equipOutfitRequest(outfitId);
-      setProfile(walletToProfile(wallet));
-      setError(null);
-    } catch (err) {
-      console.error("Failed to equip outfit", err);
-      setError(SUPPORT_ERROR);
-      throw err;
-    }
-  }, []);
+  const equipOutfit = useCallback(
+    async (outfitId: string) => {
+      await equipMutation.mutateAsync(outfitId);
+    },
+    [equipMutation],
+  );
 
   return (
     <BuddyProfileContext.Provider
       value={{
         profile,
-        loading,
+        loading: isLoading,
         error,
         refreshWallet,
         purchaseAndEquipOutfit,

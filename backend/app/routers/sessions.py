@@ -27,9 +27,9 @@ def _handle_service_error(exc: Exception) -> None:
 
 
 @router.post("", response_model=SessionOut)
-def create_session(body: CreateSessionRequest, db: Session = Depends(get_db)):
+def create_session(body: CreateSessionRequest):
     try:
-        return quiz_service.create_session(db, body.topic)
+        return quiz_service.create_session(body.topic)
     except Exception as exc:
         _handle_service_error(exc)
 
@@ -44,12 +44,10 @@ def get_session(session_id: UUID, db: Session = Depends(get_db)):
 def submit_answer(
     session_id: UUID,
     body: SubmitAnswerRequest,
-    db: Session = Depends(get_db),
     player_id: UUID = Depends(require_player_id),
 ):
     try:
         feedback, session = quiz_service.submit_answer(
-            db,
             session_id,
             body.question_id,
             body.selected_option_index,
