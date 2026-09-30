@@ -8,7 +8,8 @@ import { QuestionCard } from "../components/QuestionCard";
 import { QuizBuddyColumn } from "../components/QuizBuddyColumn";
 import { SessionSummaryView } from "../components/SessionSummary";
 import { CartIcon, HomeIcon } from "../components/icons";
-import { clearSessionId, saveSessionId, useBuddyProfile } from "../hooks/useBuddyProfile";
+import { clearSessionId, saveSessionId } from "../hooks/playerSession";
+import { useWallet } from "../hooks/useWallet";
 import {
   clearPendingFeedback,
   loadPendingFeedback,
@@ -21,7 +22,7 @@ export function QuizPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const { profile, refreshWallet, loading: walletLoading, error: walletError } = useBuddyProfile();
+  const { profile, refreshWallet, loading: walletLoading, error: walletError } = useWallet();
   const resumeOnLoad = useRef(location.state?.resume === true);
 
   const [session, setSession] = useState<Session | null>(null);

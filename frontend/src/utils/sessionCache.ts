@@ -1,5 +1,5 @@
 import type { Session } from "../api/client";
-import { loadSessionId } from "../hooks/useBuddyProfile";
+import { loadSessionId } from "../hooks/playerSession";
 
 const CACHE_KEY = "ecobuddy_active_session_cache";
 
